@@ -3,6 +3,30 @@
 本文件记录 @foolsecret/pi-skill 的每次版本更新，以产品视角描述带给用户的改变，
 可直接用作 GitHub Release 详情。
 
+## [0.3.0] — 2026-09-09
+
+### Added
+
+- **子命令体系重构**：`/skill` 现在有统一的子命令 dispatcher（panel / `create` /
+  `lint` / `help`），`/skill help` 打印对齐的 Usage 表，未知子命令给出
+  "did you mean?" 最近匹配提示
+- **`/skill create` 交互向导**：不带参数进入两步向导（name → description），
+  单焦点输入、实时校验——name 逐字符检查（首尾/连续连字符、非法字符、超长、
+  同名已存在），description 实时长度检测（n/1024）；非法不挡输入但 Enter 拦截
+  提交，`Esc` 中止不写盘；边框、配色与按键提示栏对齐管理面板
+- **`/skill lint [name]`**：确定性规范检查，只报 error 级——frontmatter 缺失、
+  name 缺失/非法、name 与目录/文件名不一致、description 缺失/超长、正文为空；
+  无参数检查全部可发现的 skill（含项目作用域），带参数检查单个
+
+### Removed
+
+- 移除 `/skill new`（由交互式 `/skill create` 取代，不带别名）
+- 移除 `/skill validate`（由 `/skill lint` 取代）
+
+### Improved
+
+- 面板排版辅助函数（折行、列表化排版）提升为共享模块，供向导与后续组件复用
+
 ## [0.2.0] — 2026-09-08
 
 ### Improved

@@ -34,15 +34,22 @@ pi install npm:@foolsecret/pi-skill
 注意：数组里只存覆盖指令，**数组为空即全部启用**——启用某个 skill 意味着移除
 对应的 `!名字` 条目，而不是写入白名单。保存后重启 pi 或执行 `/reload` 生效。
 
-### 🌱 脚手架 — `/skill new <name>`
+### 🌱 脚手架 — `/skill create [name]`
 
 按 [Agent Skills 规范](https://agentskills.io) 生成 skill 骨架（SKILL.md 模板 +
-`references/` 目录），命名先校验后创建。
+`references/` 目录），命名先校验后创建。不带参数时进入两步交互向导（对齐面板风格）：
 
-### ✅ 规范校验 — `/skill validate [name]`
+- step 1 name：实时校验（小写 a-z/0-9/连字符、首尾连字符与连续连字符、≤64 字符、
+  同名已存在），非法不挡输入但 Enter 拦截提交
+- step 2 description：实时长度检测（n/1024，超限红字拦截）
+- `Esc` 中止向导，不写盘；带参调用 `/skill create <name>` 跳过向导直接落盘
 
-检查 frontmatter 完整性、命名合法性（≤64 字符、小写 a-z/0-9/连字符）、描述长度
-（≤1024 字符），问题逐条列出。
+### 🔍 规范检查 — `/skill lint [name]`
+
+对所有能发现的 skill（全局 / 项目）做确定性规范检查，只报 error 级：frontmatter
+缺失、name 缺失或非法、name 与所在目录/文件名不一致、description 缺失或超长
+（≤1024 字符）、正文为空。带参数只检查指定 skill，无参数全量检查；
+`/skill help` 查看全部子命令。
 
 > 注：pi 内置的 `/skill:name` 命令（加载执行某个 skill）与本项目注册的 `/skill`
 > 命令互不冲突。

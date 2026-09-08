@@ -2,9 +2,10 @@
  * @foolsecret/pi-skill — skill manager for pi
  *
  * Commands:
- *   /skill                  Interactive panel: toggle skills on/off (enter, saved instantly)
- *   /skill new <name>       Scaffold a new skill in ~/.pi/agent/skills/<name>/
- *   /skill validate [name]  Validate a skill against the Agent Skills spec
+ *   /skill                Interactive panel: toggle skills on/off (saved instantly)
+ *   /skill create [name]  Scaffold a new skill (interactive wizard without a name)
+ *   /skill lint [name]    Report Agent Skills spec errors (all skills, or one)
+ *   /skill help           Show the subcommand help
  *
  * Enable/disable is stored in ~/.pi/agent/settings.json as `!pattern` override
  * entries in the `skills` array — pi's native resource enable/disable mechanism
@@ -15,7 +16,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { fuzzyFilter, getKeybindings, Key, matchesKey } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 
 const MAX_NAME = 64;
@@ -119,6 +120,45 @@ function discoverSkills(cwd: string): SkillEntry[] {
   });
 }
 
+// ---------------------------------------------------------------- lint
+
+/**
+ * Scan all standard skill locations without dedupe or name filtering, so that
+ * broken skills (missing/invalid name) are still linted instead of dropped.
+ */
+function scanAllForLint(cwd: string): SkillEntry[] {
+  return [
+    ...scanSkillDir(join(homedir(), ".pi", "agent", "skills"), "global", true),
+    ...scanSkillDir(join(homedir(), ".agents", "skills"), "global", false),
+    ...scanSkillDir(join(cwd, ".pi", "skills"), "project", true),
+    ...scanSkillDir(join(cwd, ".agents", "skills"), "project", false),
+  ];
+}
+
+/** Deterministic, error-level-only spec check for one discovered entry. */
+function lintSkillEntry(entry: SkillEntry): string[] {
+  const errors = [...entry.errors];
+  const base = basename(entry.filePath);
+  if (entry.name) {
+    if (base === "SKILL.md") {
+      const dirName = basename(dirname(entry.filePath));
+      if (entry.name !== dirName) errors.push(`name "${entry.name}" does not match directory "${dirName}"`);
+    } else if (entry.name !== base.replace(/\.md$/, "")) {
+      errors.push(`name "${entry.name}" does not match file "${base}"`);
+    }
+  }
+  // empty body: nothing but whitespace after the frontmatter block
+  try {
+    const text = readFileSync(entry.filePath, "utf-8");
+    const m = /^---\r?\n[\s\S]*?\r?\n---/.exec(text);
+    const body = m ? text.slice(m.index + m[0].length) : text;
+    if (!body.trim()) errors.push("empty body");
+  } catch {
+    // unreadable is already reported by the scanner
+  }
+  return errors;
+}
+
 // ------------------------------------------------------- enable/disable list
 
 interface SettingsDoc {
@@ -200,22 +240,7 @@ function keyLabel(binding: Parameters<ReturnType<typeof getKeybindings>["getKeys
     .join("/");
 }
 
-function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: SkillEntry[]): Promise<void> {
-  const ui: ExtensionUIContext = ctx.ui;
-  if (skills.length === 0) {
-    ui.notify("No skills found.", "info");
-    return Promise.resolve();
-  }
-  void pi;
-  return ui.custom<void>((tui, theme, _kb, done) => {
-    const state = skills.map((s) => ({ skill: s, disabled: isDisabled(readSettings(), s) }));
-    let cursor = 0;
-    let filter = ""; // always focused (single-focus input, like /scoped-models)
-
-    const filtered = (): typeof state => {
-      if (!filter) return state;
-      return fuzzyFilter(state, filter, (s) => `${s.skill.name} ${s.skill.description}`);
-    };
+// ------------------------------------------------- shared text layout helpers
 
 /** Word-wrap plain text to the given available width. */
 function wordWrap(text: string, avail: number): string[] {
@@ -276,6 +301,24 @@ function renderDescription(description: string, width: number): string[] {
   }
   return out;
 }
+
+function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: SkillEntry[]): Promise<void> {
+  const ui: ExtensionUIContext = ctx.ui;
+  if (skills.length === 0) {
+    ui.notify("No skills found.", "info");
+    return Promise.resolve();
+  }
+  void pi;
+  return ui.custom<void>((tui, theme, _kb, done) => {
+    const state = skills.map((s) => ({ skill: s, disabled: isDisabled(readSettings(), s) }));
+    let cursor = 0;
+    let filter = ""; // always focused (single-focus input, like /scoped-models)
+
+    const filtered = (): typeof state => {
+      if (!filter) return state;
+      return fuzzyFilter(state, filter, (s) => `${s.skill.name} ${s.skill.description}`);
+    };
+
     const component = {
       invalidate(): void {
         tui.requestRender();
@@ -398,11 +441,14 @@ function renderDescription(description: string, width: number): string[] {
   });
 }
 
-// ---------------------------------------------------------------- extension
+// ---------------------------------------------------------------- create
 
-const NEW_TEMPLATE = (name: string) => `---
+const PLACEHOLDER_DESCRIPTION =
+  "What this skill does and when to use it. Be specific — the description decides when the agent loads it.";
+
+const CREATE_TEMPLATE = (name: string, description: string) => `---
 name: ${name}
-description: What this skill does and when to use it. Be specific — the description decides when the agent loads it.
+description: ${description}
 ---
 
 # ${name}
@@ -413,76 +459,235 @@ Describe the workflow here. Reference relative paths from this skill directory, 
 [references/guide.md](references/guide.md).
 `;
 
-function validateSkillFile(skillPath: string): string[] {
-  if (!existsSync(skillPath)) return [`not found: ${skillPath}`];
-  let text: string;
-  try {
-    text = readFileSync(skillPath, "utf-8");
-  } catch (e) {
-    return [`cannot read: ${e}`];
+function globalSkillsDir(): string {
+  return join(homedir(), ".pi", "agent", "skills");
+}
+
+function scaffoldSkill(name: string, description: string): string {
+  const dir = join(globalSkillsDir(), name);
+  mkdirSync(join(dir, "references"), { recursive: true });
+  const skillPath = join(dir, "SKILL.md");
+  writeFileSync(skillPath, CREATE_TEMPLATE(name, description));
+  return skillPath;
+}
+
+/**
+ * Interactive two-step create wizard (name → description), styled like the
+ * management panel: framed, single-focus input, realtime validation hints.
+ * Resolves to the created SKILL.md path, or null when cancelled.
+ */
+function openCreateWizard(ctx: ExtensionCommandContext): Promise<string | null> {
+  const ui: ExtensionUIContext = ctx.ui;
+  return ui.custom<string | null>((tui, theme, _kb, done) => {
+    let step: "name" | "description" = "name";
+    let name = "";
+    let input = "";
+
+    const liveErrors = (): string[] => {
+      if (step === "name") {
+        const errs = validateName(input);
+        if (errs.length === 0 && existsSync(join(globalSkillsDir(), input, "SKILL.md"))) {
+          errs.push("skill already exists");
+        }
+        return errs;
+      }
+      return input.length > MAX_DESC ? [`description exceeds ${MAX_DESC} characters (${input.length})`] : [];
+    };
+
+    const component = {
+      invalidate(): void {
+        tui.requestRender();
+      },
+      render(width: number): string[] {
+        const rows: string[] = [];
+        const border = theme.fg("border", "─".repeat(Math.max(1, width)));
+        rows.push(border);
+        rows.push("");
+        rows.push(theme.bold("Create Skill"));
+        rows.push("");
+        if (step === "name") {
+          rows.push(`Name ${theme.fg("dim", "(lowercase a-z, 0-9, hyphens)")}`);
+        } else {
+          rows.push(`Description ${theme.fg("dim", `(${input.length}/${MAX_DESC})`)}`);
+        }
+        rows.push(`> ${input}█`);
+        const errs = liveErrors();
+        if (errs.length > 0) {
+          rows.push(...wrapDetail(errs.join("; "), 2, width).map((l) => theme.fg("error", l)));
+        } else if (step === "description" && !input.trim()) {
+          rows.push(theme.fg("dim", "  description is required"));
+        }
+        rows.push("");
+        rows.push(theme.fg("dim", `${keyLabel("tui.select.confirm")} ${step === "name" ? "next" : "create"} · Esc cancel · ${step === "name" ? 1 : 2}/2`));
+        rows.push(border);
+        return rows;
+      },
+      handleInput(data: string): void {
+        if (matchesKey(data, Key.escape)) {
+          done(null);
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          const errs = liveErrors();
+          if (step === "name") {
+            if (errs.length > 0) return; // invalid name: submit blocked, hint already rendered
+            name = input;
+            step = "description";
+            input = "";
+            tui.requestRender();
+            return;
+          }
+          if (errs.length > 0 || !input.trim()) return; // over-long or empty description: blocked
+          const skillPath = join(globalSkillsDir(), name, "SKILL.md");
+          if (existsSync(skillPath)) return; // raced: someone created it meanwhile
+          done(scaffoldSkill(name, input.trim()))!;
+          return;
+        }
+        if (matchesKey(data, Key.backspace)) {
+          input = input.slice(0, -1);
+          tui.requestRender();
+          return;
+        }
+        if (data.length === 1 && data >= " " && data !== "\x7f") {
+          input += data;
+          tui.requestRender();
+        }
+      },
+    };
+    return component;
+  });
+}
+
+function cmdCreate(rest: string, ctx: ExtensionCommandContext): Promise<void> | void {
+  const name = rest.trim();
+  if (!name) {
+    // no name given: interactive wizard
+    return openCreateWizard(ctx).then((path) => {
+      if (path) ctx.ui.notify(`Created skill scaffold: ${path}`, "info");
+    });
   }
-  const fm = parseFrontmatter(text);
-  if (!fm) return ["missing frontmatter block (must start with `---` line)"];
-  const errors: string[] = [];
-  errors.push(...validateName(fm.name ?? "").map((e) => `name: ${e}`));
-  const desc = fm.description ?? "";
-  if (!desc.trim()) errors.push("description is required");
-  else if (desc.length > MAX_DESC) errors.push(`description exceeds ${MAX_DESC} characters (${desc.length})`);
-  return errors;
+  const single = name.split(/\s+/)[0];
+  const errors = validateName(single);
+  if (errors.length > 0) {
+    ctx.ui.notify(`Invalid skill name: ${errors.join("; ")}`, "error");
+    return;
+  }
+  const skillPath = join(globalSkillsDir(), single, "SKILL.md");
+  if (existsSync(skillPath)) {
+    ctx.ui.notify(`Skill already exists: ${skillPath}`, "error");
+    return;
+  }
+  ctx.ui.notify(`Created skill scaffold: ${scaffoldSkill(single, PLACEHOLDER_DESCRIPTION)}`, "info");
+}
+
+// ---------------------------------------------------------------- lint cmd
+
+function cmdLint(rest: string, ctx: ExtensionCommandContext): void {
+  const target = rest.trim();
+  const entries = scanAllForLint(ctx.cwd ?? process.cwd());
+  if (entries.length === 0) {
+    ctx.ui.notify("No skills found.", "info");
+    return;
+  }
+  const picked = target
+    ? entries.filter((e) => {
+        if (e.name === target) return true;
+        const base = basename(e.filePath);
+        return base === "SKILL.md" ? basename(dirname(e.filePath)) === target : base.replace(/\.md$/, "") === target;
+      })
+    : entries;
+  if (picked.length === 0) {
+    ctx.ui.notify(`No skill found: ${target}`, "warning");
+    return;
+  }
+  const results = picked.map((e) => ({ entry: e, errors: lintSkillEntry(e) }));
+  const bad = results.filter((r) => r.errors.length > 0);
+  if (bad.length === 0) {
+    ctx.ui.notify(`${results.length} skill${results.length === 1 ? "" : "s"} OK`, "info");
+    return;
+  }
+  const report = bad.map((r) => `${r.entry.filePath}\n  ${r.errors.join("\n  ")}`).join("\n");
+  ctx.ui.notify(`${bad.length}/${results.length} skills failed lint:\n${report}`, "error");
+}
+
+// ---------------------------------------------------------------- dispatcher
+
+interface SubCommand {
+  name: string;
+  args: string;
+  description: string;
+  handler: (rest: string, ctx: ExtensionCommandContext) => void | Promise<void>;
+}
+
+const SUBCOMMANDS: SubCommand[] = [
+  { name: "create", args: "[name]", description: "scaffold a new skill (interactive without a name)", handler: cmdCreate },
+  { name: "lint", args: "[name]", description: "report Agent Skills spec errors (all skills, or one)", handler: cmdLint },
+];
+
+function helpBody(): string {
+  const lefts = ["/skill", ...SUBCOMMANDS.map((c) => `/skill ${c.name} ${c.args}`.trimEnd()), "/skill help"];
+  const descs = [
+    "open the skill management panel",
+    ...SUBCOMMANDS.map((c) => c.description),
+    "show this help",
+  ];
+  const width = Math.max(...lefts.map((s) => s.length)) + 2;
+  return lefts.map((l, i) => `${l.padEnd(width)}${descs[i]}`).join("\n");
+}
+
+function editDistance(a: string, b: string): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
 }
 
 export default function skillManager(pi: ExtensionAPI) {
   pi.registerCommand("skill", {
-    description: "Manage skills: panel (no args), new <name>, validate [name]",
+    description: "Manage skills: panel (no args), create [name], lint [name], help",
     handler: async (args, ctx) => {
-      const [sub, name] = args.trim().split(/\s+/);
-
-      if (!sub) {
-        const skills = discoverSkills(ctx.cwd ?? process.cwd());
-        await openPanel(pi, ctx, skills);
+      const rest = args.trim();
+      if (!rest) {
+        await openPanel(pi, ctx, discoverSkills(ctx.cwd ?? process.cwd()));
         return;
       }
-
-      if (sub === "new") {
-        if (!name) {
-          ctx.ui.notify("Usage: /skill new <name>  (lowercase a-z, 0-9, hyphens)", "warning");
-          return;
-        }
-        const nameErrors = validateName(name);
-        if (nameErrors.length > 0) {
-          ctx.ui.notify(`Invalid skill name: ${nameErrors.join("; ")}`, "error");
-          return;
-        }
-        const dir = join(homedir(), ".pi", "agent", "skills", name);
-        const skillPath = join(dir, "SKILL.md");
-        if (existsSync(skillPath)) {
-          ctx.ui.notify(`Skill already exists: ${skillPath}`, "error");
-          return;
-        }
-        mkdirSync(join(dir, "references"), { recursive: true });
-        writeFileSync(skillPath, NEW_TEMPLATE(name));
-        ctx.ui.notify(`Created skill scaffold: ${skillPath}`, "info");
+      const [sub, ...tail] = rest.split(/\s+/);
+      if (sub === "help") {
+        ctx.ui.notify(`Usage:\n  ${helpBody()}`, "info");
         return;
       }
-
-      if (sub === "validate") {
-        const target = name
-          ? join(homedir(), ".pi", "agent", "skills", name, "SKILL.md")
-          : join(homedir(), ".pi", "agent", "skills", "SKILL.md");
-        const errors = validateSkillFile(target);
-        if (errors.length === 0) ctx.ui.notify(`OK: ${target}`, "info");
-        else ctx.ui.notify(`${target}\n  - ${errors.join("\n  - ")}`, "error");
+      const cmd = SUBCOMMANDS.find((c) => c.name === sub);
+      if (cmd) {
+        await cmd.handler(tail.join(" "), ctx);
         return;
       }
-
+      const tolerance = Math.max(2, Math.floor(sub.length / 3));
+      const near = SUBCOMMANDS.map((c) => c.name).filter((n) => editDistance(sub, n) <= tolerance);
       ctx.ui.notify(
-        "Usage:\n  /skill                open the skill management panel\n  /skill new <name>     scaffold a new skill\n  /skill validate [name]  validate against the spec",
-        "info",
+        `Unknown subcommand: ${sub}${near.length > 0 ? ` (did you mean: ${near.join(", ")}?)` : ""}\nUsage:\n  ${helpBody()}`,
+        "error",
       );
     },
   });
 }
 
-// keep statSync/basename referenced for potential future use (symlink handling)
+// keep statSync referenced for potential future use (symlink handling)
 void statSync;
-void basename;
+
+/** Exposed for the smoke test only; not part of the extension surface. */
+export const __test = {
+  validateName,
+  lintSkillEntry,
+  scanAllForLint,
+  scaffoldSkill,
+  editDistance,
+  helpBody,
+  cmdCreate,
+  cmdLint,
+  PLACEHOLDER_DESCRIPTION,
+  MAX_DESC,
+};
