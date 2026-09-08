@@ -38,6 +38,16 @@
 
 ---
 
+### 2026-09-08 会话 5 — 面板重设计：逐项对齐 /scoped-models
+
+- 用户提出用内置 `/scoped-models` 选择器的样式重做 `/skill` 面板。决策：只搬视觉与交互，保留即时保存——"session-only + Ctrl+S"语义对 skill 不可行（pi 只在启动/reload 时加载 skills，extension 无运行时干预钩子，会话 2 已调研过）。
+- 研读了 pi 的 `ScopedModelsSelectorComponent` 参考实现（dist/modes/interactive/components/），逐元素对齐：居中滚动视口、`(n/N)` 指示、选中项详情行、底部按键提示栏（`getKeybindings().getKeys()` 读取用户实际键位）、`fuzzyFilter` 模糊搜索、单焦点输入（直接打字即过滤，Esc 先清过滤再关闭）、Ctrl+A/Ctrl+X 批量启用/禁用（作用于过滤结果）。
+- 顺带修掉了会话 4 发现的三个隐患之一：`setDisabled` 重写为只增删精确 `!名字` 条目（Set 操作），不再碰普通搜索路径条目；残留清理迁移到 Ctrl+D 且只删 `!` 前缀条目。剩余两隐患（fail-closed 读入、原子写+锁）待办中。
+- 冒烟测试验证了开发规范：`HOME=$(mktemp -d)` 隔离跑 tsx，39 项断言全过，并直接断言"真实 settings.json 未被触碰"。两个教训：① 测试断言要跟实现语义对齐（滚动指示器只在超出视口时出现、toggle 不移动光标）；② 项目 node_modules 的 pi-tui stub 需随新 API 同步补齐（fuzzyFilter/getKeybindings/Key.ctrl）。
+- README/CHANGELOG 同步，含 setDisabled 误删修复的 Fixed 条目。
+
+---
+
 ## 项目进度
 
 ### 已完成
@@ -52,6 +62,7 @@
 - [x] 旧扩展文件清理（`~/.pi/agent/extensions/skill-manager.ts` 已删除，改由包加载）
 - [x] `pi install ~/projects/pi-skill` 本地注册（settings.packages 引用本地包路径，启动无报错）
 - [x] 面板交互重设计：即时保存、搜索过滤、统计行、viewport 滚动、残留清理
+- [x] 面板视觉重设计：逐项对齐 /scoped-models（滚动视口、详情行、键位提示栏、fuzzyFilter、批量操作）；修复 setDisabled 误删搜索路径条目
 
 ### 待办
 
@@ -60,7 +71,7 @@
 - [ ] 项目级（project scope）开关支持（写 `.pi/settings.json`，类似 `pi config` 的 Tab 切换）
 - [ ] 冲突检测：同名 skill 多来源时的提示（pi 保留先发现者）
 - [ ] skill 安装/卸载（`/skill install <git-url|npm>`）
-- [ ] 修复插件 settings 写入的三个隐患：readSettings 解析失败 fail-closed（拒绝写入而非返回空对象）、原子写（tmp+rename）+ proper-lockfile 锁、setDisabled/清理只增删本插件拥有的 `!name` 精确覆盖条目
+- [ ] 修复插件 settings 写入的剩余两个隐患：readSettings 解析失败 fail-closed（拒绝写入而非返回空对象）、原子写（tmp+rename）+ proper-lockfile 锁（精确 `!条目` 一项已在会话 5 完成）
 
 ---
 

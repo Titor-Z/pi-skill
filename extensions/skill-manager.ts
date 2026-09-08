@@ -2,7 +2,7 @@
  * @foolsecret/pi-skill — skill manager for pi
  *
  * Commands:
- *   /skill                  Interactive panel: toggle skills on/off (space), save (enter)
+ *   /skill                  Interactive panel: toggle skills on/off (enter, saved instantly)
  *   /skill new <name>       Scaffold a new skill in ~/.pi/agent/skills/<name>/
  *   /skill validate [name]  Validate a skill against the Agent Skills spec
  *
@@ -12,7 +12,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { fuzzyFilter, getKeybindings, Key, matchesKey } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -20,7 +20,7 @@ import { basename, join, relative } from "node:path";
 
 const MAX_NAME = 64;
 const MAX_DESC = 1024;
-const PANEL_MAX_VISIBLE = 16;
+const PANEL_MAX_VISIBLE = 8;
 
 // ---------------------------------------------------------------- discovery
 
@@ -161,17 +161,19 @@ function isDisabled(settings: SettingsDoc, skill: SkillEntry): boolean {
 }
 
 /**
- * Toggle a skill in settings.skills by adding/removing a `!name` entry.
- * Other entries (extra search paths, unrelated overrides) are preserved.
+ * Toggle one or more skills in settings.skills by adding/removing the exact
+ * `!name` override entries. All other entries (search paths, unrelated
+ * overrides) are preserved untouched. Glob-style stale overrides are left to
+ * the panel's clean-stale action.
  */
-function setDisabled(skill: SkillEntry, disabled: boolean): void {
+function setDisabled(skills: SkillEntry | SkillEntry[], disabled: boolean): void {
   const settings = readSettings();
-  const list = settings.skills ?? [];
-  const name = skill.name;
-  // remove any override entries that reference this skill
-  const cleaned = list.filter((p) => !patternMatches(p.replace(/^[!+-]/, ""), skill) || p.startsWith("+"));
-  if (disabled) cleaned.push(`!${name}`);
-  settings.skills = cleaned;
+  const list = new Set(settings.skills ?? []);
+  for (const skill of Array.isArray(skills) ? skills : [skills]) {
+    if (disabled) list.add(`!${skill.name}`);
+    else list.delete(`!${skill.name}`);
+  }
+  settings.skills = [...list];
   writeFileSync(settingsPath(), JSON.stringify(settings, null, 2) + "\n");
 }
 
@@ -182,6 +184,22 @@ function stalePatterns(settings: SettingsDoc, skills: SkillEntry[]): string[] {
   return disabledPatterns(settings).filter((p) => !skills.some((s) => patternMatches(p, s)));
 }
 
+/** Human-readable label for a keybinding, e.g. "Enter" / "Ctrl+A". */
+function keyLabel(binding: Parameters<ReturnType<typeof getKeybindings>["getKeys"]>[0]): string {
+  const format = (key: string): string =>
+    key
+      .split("+")
+      .map((part) => {
+        const p = process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part;
+        return p.charAt(0).toUpperCase() + p.slice(1);
+      })
+      .join("+");
+  return getKeybindings()
+    .getKeys(binding)
+    .map(format)
+    .join("/");
+}
+
 function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: SkillEntry[]): Promise<void> {
   const ui: ExtensionUIContext = ctx.ui;
   if (skills.length === 0) {
@@ -190,130 +208,134 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
   }
   void pi;
   return ui.custom<void>((tui, theme, _kb, done) => {
-      const settings = readSettings();
-      const state = skills.map((s) => ({ skill: s, disabled: isDisabled(settings, s) }));
-      let cursor = 0;
-      let filter = "";
-      let searchMode = false;
-      let feedback = "";
-      let viewTop = 0; // first visible index (scrolling viewport)
+    const state = skills.map((s) => ({ skill: s, disabled: isDisabled(readSettings(), s) }));
+    let cursor = 0;
+    let filter = ""; // always focused (single-focus input, like /scoped-models)
 
-      const filtered = (): typeof state => {
-        if (!filter) return state;
-        const q = filter.toLowerCase();
-        return state.filter(
-          (s) =>
-            s.skill.name.toLowerCase().includes(q) ||
-            s.skill.description.toLowerCase().includes(q),
-        );
-      };
+    const filtered = (): typeof state => {
+      if (!filter) return state;
+      return fuzzyFilter(state, filter, (s) => `${s.skill.name} ${s.skill.description}`);
+    };
 
-      const line = (text: string, width: number) => (text.length > width ? text.slice(0, width - 1) + "…" : text);
+    const line = (text: string, width: number) => (text.length > width ? text.slice(0, width - 1) + "…" : text);
 
-      const component = {
-        invalidate(): void {
-          tui.requestRender();
-        },
-        render(width: number): string[] {
-          const rows: string[] = [];
-          const items = filtered();
-          if (cursor < viewTop) viewTop = cursor;
-          if (cursor >= viewTop + PANEL_MAX_VISIBLE) viewTop = cursor - PANEL_MAX_VISIBLE + 1;
-          const enabled = state.filter((s) => !s.disabled).length;
-          const stats = `${state.length} skills · ${enabled} enabled · ${state.length - enabled} disabled`;
-          const filterTag = filter ? theme.fg("accent", ` · ${items.length}/${state.length} shown`) : "";
-          rows.push(theme.bold("Skills") + theme.fg("dim", `  — ${stats}${filterTag}`));
-          const searchRow = searchMode
-            ? theme.fg("accent", `filter: ${filter}█`)
-            : filter
-              ? theme.fg("dim", `filter: ${filter}`)
-              : theme.fg("dim", "press / to filter");
-          rows.push(searchRow);
-          rows.push("");
-          if (items.length === 0) {
-            rows.push(theme.fg("dim", "  (no match)"));
-          }
-          for (let i = viewTop; i < Math.min(items.length, viewTop + PANEL_MAX_VISIBLE); i++) {
+    const component = {
+      invalidate(): void {
+        tui.requestRender();
+      },
+      render(width: number): string[] {
+        const items = filtered();
+        if (cursor > items.length - 1) cursor = Math.max(0, items.length - 1);
+        const enabled = state.filter((s) => !s.disabled).length;
+        const rows: string[] = [];
+
+        rows.push(theme.bold("Skill Configuration"));
+        rows.push(theme.fg("dim", "Saved instantly. Takes effect after /reload."));
+        rows.push("");
+        rows.push(filter ? `> ${filter}█` : theme.fg("dim", "> type to filter"));
+        rows.push("");
+        if (items.length === 0) {
+          rows.push(theme.fg("dim", "  No matching skills"));
+        } else {
+          // centered scrolling viewport (same as /scoped-models)
+          const start = Math.max(0, Math.min(cursor - Math.floor(PANEL_MAX_VISIBLE / 2), items.length - PANEL_MAX_VISIBLE));
+          const end = Math.min(start + PANEL_MAX_VISIBLE, items.length);
+          for (let i = start; i < end; i++) {
             const { skill, disabled } = items[i];
-            const marker = i === cursor ? theme.fg("accent", "▸ ") : "  ";
-            const box = disabled ? theme.fg("dim", "[x]") : theme.fg("success", "[ ]");
-            const name = line(skill.name, 24).padEnd(24);
-            const desc = line(skill.description || "(no description)", Math.max(10, width - 46));
-            const scopeTag = theme.fg(skill.scope === "global" ? "dim" : "warning", skill.scope === "global" ? "global" : "project");
+            const selected = i === cursor;
+            const prefix = selected ? theme.fg("accent", "→ ") : "  ";
+            const status = disabled ? "  " : theme.fg("success", "✓ ");
+            const name = disabled ? theme.fg("dim", skill.name) : selected ? theme.fg("accent", skill.name) : skill.name;
+            const scope = theme.fg("dim", skill.scope === "global" ? " [global]" : " [project]");
             const warn = skill.errors.length > 0 ? theme.fg("error", " ⚠") : "";
-            const row = `${marker}${box} ${disabled ? theme.fg("dim", name) : name} ${theme.fg("dim", desc)}  ${scopeTag}${warn}`;
-            rows.push(i === cursor ? theme.fg("accent", row) : row);
+            rows.push(`${prefix}${status}${name}${scope}${warn}`);
+          }
+          if (start > 0 || end < items.length) {
+            rows.push(theme.fg("dim", `  (${cursor + 1}/${items.length})`));
           }
           rows.push("");
+          // detail line for the selected skill
           const sel = items[cursor]?.skill;
-          if (sel?.errors.length) {
-            rows.push(theme.fg("error", `⚠ ${sel.name}: ${sel.errors.join("; ")}`));
-          }
-          if (feedback) {
-            rows.push(theme.fg("success", `✓ ${feedback}`));
-          }
-          const stale = stalePatterns(readSettings(), skills);
-          if (stale.length > 0) {
-            rows.push(theme.fg("warning", `${stale.length} stale pattern(s) in settings: ${stale.join(", ")} — press c to clean`));
-          }
-          rows.push(theme.fg("dim", "  space toggle (saved instantly) · / filter · esc close"));
-          return rows;
-        },
-        handleInput(data: string): void {
-          const items = filtered();
-          if (cursor > items.length - 1) cursor = Math.max(0, items.length - 1);
-          if (searchMode) {
-            if (matchesKey(data, Key.escape)) {
-              searchMode = false;
-              filter = "";
-              cursor = 0;
-              viewTop = 0;
-              tui.requestRender();
-            } else if (matchesKey(data, Key.backspace)) {
-              filter = filter.slice(0, -1);
-              cursor = 0;
-              viewTop = 0;
-              tui.requestRender();
-            } else if (data.length === 1 && data >= " " && data !== "\x7f") {
-              filter += data;
-              cursor = 0;
-              viewTop = 0;
-              tui.requestRender();
+          if (sel) {
+            if (sel.errors.length > 0) {
+              rows.push(theme.fg("error", line(`⚠ ${sel.name}: ${sel.errors.join("; ")}`, Math.max(20, width - 2))));
+            } else {
+              rows.push(theme.fg("dim", line(`  ${sel.description || "(no description)"}`, Math.max(20, width - 2))));
             }
-            return;
           }
-          if (matchesKey(data, Key.up) || data === "k") {
-            cursor = Math.max(0, cursor - 1);
-            feedback = "";
+        }
+        rows.push("");
+        // footer: keybinding hints + counter (mirrors /scoped-models)
+        const stale = stalePatterns(readSettings(), state.map((s) => s.skill));
+        const parts = [
+          `${keyLabel("tui.select.confirm")} toggle`,
+          "ctrl+a all",
+          "ctrl+x clear",
+        ];
+        if (stale.length > 0) parts.push("ctrl+d clean stale");
+        parts.push(`${enabled}/${state.length} enabled`);
+        rows.push(theme.fg("dim", `  ${parts.join(" · ")}`));
+        return rows;
+      },
+      handleInput(data: string): void {
+        const items = filtered();
+        if (cursor > items.length - 1) cursor = Math.max(0, items.length - 1);
+
+        const apply = (targets: SkillEntry[], disabled: boolean): void => {
+          setDisabled(targets, disabled);
+          for (const entry of state) {
+            if (targets.includes(entry.skill)) entry.disabled = disabled;
+          }
+          tui.requestRender();
+        };
+
+        if (matchesKey(data, Key.up)) {
+          // wraps at both ends, like /scoped-models
+          cursor = items.length === 0 ? 0 : cursor === 0 ? items.length - 1 : cursor - 1;
+          tui.requestRender();
+        } else if (matchesKey(data, Key.down)) {
+          cursor = items.length === 0 ? 0 : cursor === items.length - 1 ? 0 : cursor + 1;
+          tui.requestRender();
+        } else if (matchesKey(data, Key.enter)) {
+          const entry = items[cursor];
+          if (entry) apply([entry.skill], !entry.disabled);
+        } else if (matchesKey(data, Key.ctrl("a"))) {
+          // enable all (filtered set when a filter is active)
+          apply(items.map((s) => s.skill), false);
+        } else if (matchesKey(data, Key.ctrl("x"))) {
+          // disable all (filtered set when a filter is active)
+          apply(items.map((s) => s.skill), true);
+        } else if (matchesKey(data, Key.ctrl("d"))) {
+          const all = state.map((s) => s.skill);
+          const stale = stalePatterns(readSettings(), all);
+          if (stale.length > 0) {
+            const settings = readSettings();
+            settings.skills = (settings.skills ?? []).filter((p) => !(p.startsWith("!") && stale.includes(p.slice(1))));
+            writeFileSync(settingsPath(), JSON.stringify(settings, null, 2) + "\n");
             tui.requestRender();
-          } else if (matchesKey(data, Key.down) || data === "j") {
-            cursor = Math.min(items.length - 1, cursor + 1);
-            feedback = "";
+          }
+        } else if (matchesKey(data, Key.escape)) {
+          // first escape clears the filter, second closes the panel
+          if (filter) {
+            filter = "";
+            cursor = 0;
             tui.requestRender();
-          } else if (matchesKey(data, Key.space)) {
-            const entry = items[cursor];
-            if (!entry) return;
-            entry.disabled = !entry.disabled;
-            setDisabled(entry.skill, entry.disabled);
-            feedback = `${entry.skill.name} → ${entry.disabled ? "disabled" : "enabled"}`;
-            tui.requestRender();
-          } else if (data === "/") {
-            searchMode = true;
-            tui.requestRender();
-          } else if (data === "c" && stalePatterns(readSettings(), skills).length > 0) {
-            const s = readSettings();
-            const stale = stalePatterns(s, skills);
-            s.skills = (s.skills ?? []).filter((p) => !stale.includes(p.replace(/^[!+-]/, "")));
-            writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + "\n");
-            feedback = `removed ${stale.length} stale pattern(s)`;
-            tui.requestRender();
-          } else if (matchesKey(data, Key.escape) || data === "q") {
+          } else {
             done();
           }
-        },
-      };
-      return component;
-    });
+        } else if (matchesKey(data, Key.backspace)) {
+          filter = filter.slice(0, -1);
+          cursor = 0;
+          tui.requestRender();
+        } else if (data.length === 1 && data >= " " && data !== "\x7f") {
+          filter += data;
+          cursor = 0;
+          tui.requestRender();
+        }
+      },
+    };
+    return component;
+  });
 }
 
 // ---------------------------------------------------------------- extension
