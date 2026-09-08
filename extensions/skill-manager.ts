@@ -265,6 +265,16 @@ function wrapDetail(content: string, indent: number, width: number): string[] {
   return wordWrap(content, Math.max(10, width - indent)).map((l) => pad + l);
 }
 
+/**
+ * Tail window for live input lines: never render an input wider than the
+ * terminal (over-wide lines crash the TUI renderer); show the tail with a
+ * leading ellipsis since the cursor always sits at the end.
+ */
+function inputTail(input: string, avail: number): string {
+  const a = Math.max(4, avail);
+  return input.length > a ? `…${input.slice(input.length - a + 1)}` : input;
+}
+
 const LIST_MARKER_RE = /(^|\s)([-•*]|\d{1,2}[.)]|\([a-z0-9]{1,2}\)|[a-z]\))(?=\s)/gi;
 
 /** Split an inline enumeration ("(a) … (b) …", "1. … 2. …", "- … - …") into intro + items; null if not list-like. */
@@ -336,7 +346,7 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
         rows.push(theme.bold("Skill Configuration"));
         rows.push(theme.fg("dim", "Saved instantly. Takes effect after /reload."));
         rows.push("");
-        rows.push(filter ? `> ${filter}█` : theme.fg("dim", "> type to filter"));
+        rows.push(filter ? `> ${inputTail(filter, width - 4)}█` : theme.fg("dim", "> type to filter"));
         rows.push("");
         if (items.length === 0) {
           rows.push(theme.fg("dim", "  No matching skills"));
@@ -507,11 +517,14 @@ function openCreateWizard(ctx: ExtensionCommandContext): Promise<string | null> 
         rows.push(theme.bold("Create Skill"));
         rows.push("");
         if (step === "name") {
-          rows.push(`Name ${theme.fg("dim", "(lowercase a-z, 0-9, hyphens)")}`);
+          rows.push(`Name ${theme.fg("dim", `(${input.length}/${MAX_NAME})`)} ${theme.fg("dim", "lowercase a-z, 0-9, hyphens")}`);
         } else {
           rows.push(`Description ${theme.fg("dim", `(${input.length}/${MAX_DESC})`)}`);
         }
-        rows.push(`> ${input}█`);
+        rows.push(`> ${inputTail(input, width - 4)}█`);
+        if (input.length >= (step === "name" ? MAX_NAME : MAX_DESC)) {
+          rows.push(theme.fg("dim", "limit reached — further input is ignored"));
+        }
         const errs = liveErrors();
         if (errs.length > 0) {
           rows.push(...wrapDetail(errs.join("; "), 2, width).map((l) => theme.fg("error", l)));
@@ -550,7 +563,9 @@ function openCreateWizard(ctx: ExtensionCommandContext): Promise<string | null> 
           return;
         }
         if (data.length === 1 && data >= " " && data !== "\x7f") {
-          input += data;
+          // hard cap: ignore input beyond the limit (forced truncation, never crashes)
+          const cap = step === "name" ? MAX_NAME : MAX_DESC;
+          if (input.length < cap) input += data;
           tui.requestRender();
         }
       },
@@ -723,4 +738,5 @@ export const __test = {
   argumentCompletions,
   PLACEHOLDER_DESCRIPTION,
   MAX_DESC,
+  MAX_NAME,
 };

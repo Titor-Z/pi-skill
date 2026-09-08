@@ -1,6 +1,6 @@
 {
   "name": "@foolsecret/pi-skill",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Skill manager for pi: interactive enable/disable panel, interactive scaffolding, and spec linting for Agent Skills.",
   "keywords": [
     "pi-package",

@@ -101,7 +101,7 @@ function lastNotify(d: Driver): Notify | undefined {
 }
 
 async function main(): Promise<void> {
-  const { validateName, lintSkillEntry, scanAllForLint, scaffoldSkill, editDistance, helpBody, cmdCreate, cmdLint, argumentCompletions, PLACEHOLDER_DESCRIPTION, MAX_DESC } =
+  const { validateName, lintSkillEntry, scanAllForLint, scaffoldSkill, editDistance, helpBody, cmdCreate, cmdLint, argumentCompletions, PLACEHOLDER_DESCRIPTION, MAX_DESC, MAX_NAME } =
     __test;
 
   console.log("validateName");
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
   d4.component.handleInput("\x1b");
   await p4;
 
-  // over-long description blocks submit
+  // description hard cap: input beyond MAX_DESC is ignored (forced truncation)
   const d5 = makeDriver(PROJECT);
   const p5 = handler("create", d5.ctx);
   await Promise.resolve();
@@ -202,14 +202,32 @@ async function main(): Promise<void> {
   d5.component.handleInput("o");
   d5.component.handleInput("o");
   d5.component.handleInput("\r");
-  for (let i = 0; i < MAX_DESC + 1; i++) d5.component.handleInput("a");
+  for (let i = 0; i < MAX_DESC + 50; i++) d5.component.handleInput("a");
   frame = (d5.component.render(60) as string[]).join("\n");
-  ok(frame.includes(`description exceeds ${MAX_DESC} characters`), "realtime description length error rendered");
+  ok(frame.includes(`(${MAX_DESC}/${MAX_DESC})`), "description counter shows hard cap");
+  ok(frame.includes("limit reached"), "limit-reached hint rendered");
+  ok((d5.component.render(60) as string[]).every((l: string) => l.length <= 60), "no rendered line exceeds terminal width");
   d5.component.handleInput("\r");
-  frame = (d5.component.render(60) as string[]).join("\n");
-  ok(frame.includes("Description"), "Enter blocked on over-long description (still step 2)");
-  d5.component.handleInput("\x1b");
   await p5;
+  const cappedPath = join(GLOBAL_SKILLS, "too", "SKILL.md");
+  ok(existsSync(cappedPath), "create proceeds at cap (forced truncation)");
+  const descMatch = /^description: (.*)$/m.exec(readFileSync(cappedPath, "utf-8"));
+  ok(descMatch?.[1].length === MAX_DESC, `description truncated to exactly ${MAX_DESC} chars`);
+
+  // name hard cap: 70 typed chars truncated to 64
+  const d12 = makeDriver(PROJECT);
+  const p12 = handler("create", d12.ctx);
+  await Promise.resolve();
+  for (let i = 0; i < 70; i++) d12.component.handleInput("n");
+  frame = (d12.component.render(60) as string[]).join("\n");
+  ok(frame.includes(`(${MAX_NAME}/${MAX_NAME})`), "name counter shows hard cap");
+  ok((d12.component.render(60) as string[]).every((l: string) => l.length <= 60), "over-long name input stays within width");
+  d12.component.handleInput("\r");
+  d12.component.handleInput("d");
+  d12.component.handleInput(".");
+  d12.component.handleInput("\r");
+  await p12;
+  ok(existsSync(join(GLOBAL_SKILLS, "n".repeat(MAX_NAME), "SKILL.md")), "name truncated to exactly 64 chars");
 
   // ---------------------------------------------------------------- lint
 
@@ -307,6 +325,17 @@ async function main(): Promise<void> {
   ok(settingsObj.model === "test-model" && settingsObj.packages?.length === 1, "unrelated settings keys preserved");
   d11.component.handleInput("\x1b");
   await p11;
+
+  // panel filter with very long input: display tail-window keeps render safe
+  console.log("panel long filter");
+  const d13 = makeDriver(PROJECT);
+  const p13 = handler("", d13.ctx);
+  await Promise.resolve();
+  for (let i = 0; i < 500; i++) d13.component.handleInput("x");
+  ok((d13.component.render(80) as string[]).every((l: string) => l.length <= 80), "panel filter render stays within width");
+  d13.component.handleInput("\x1b"); // first Esc clears the filter
+  d13.component.handleInput("\x1b"); // second Esc closes the panel
+  await p13;
 
   console.log("argument completions");
   const ac = argumentCompletions;
