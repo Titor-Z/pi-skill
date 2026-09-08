@@ -177,25 +177,38 @@ function setDisabled(skill: SkillEntry, disabled: boolean): void {
 
 // ---------------------------------------------------------------- panel UI
 
-interface PanelResult {
-  toggled: string[]; // names whose state changed (already persisted)
-  cancelled: boolean;
+/** Stale `!pattern` entries in settings that point at no known skill. */
+function stalePatterns(settings: SettingsDoc, skills: SkillEntry[]): string[] {
+  return disabledPatterns(settings).filter((p) => !skills.some((s) => patternMatches(p, s)));
 }
 
-function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: SkillEntry[]): Promise<PanelResult | null> {
+function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: SkillEntry[]): Promise<void> {
   const ui: ExtensionUIContext = ctx.ui;
   if (skills.length === 0) {
     ui.notify("No skills found.", "info");
-    return Promise.resolve(null);
+    return Promise.resolve();
   }
   void pi;
-  return ui.custom<PanelResult>((tui, theme, _kb, done) => {
+  return ui.custom<void>((tui, theme, _kb, done) => {
       const settings = readSettings();
       const state = skills.map((s) => ({ skill: s, disabled: isDisabled(settings, s) }));
-      const initial = new Map(state.map((s) => [s.skill.name, s.disabled]));
       let cursor = 0;
+      let filter = "";
+      let searchMode = false;
+      let feedback = "";
+      let viewTop = 0; // first visible index (scrolling viewport)
 
-      const line = (text: string, width: number) => text.length > width ? text.slice(0, width - 1) + "…" : text;
+      const filtered = (): typeof state => {
+        if (!filter) return state;
+        const q = filter.toLowerCase();
+        return state.filter(
+          (s) =>
+            s.skill.name.toLowerCase().includes(q) ||
+            s.skill.description.toLowerCase().includes(q),
+        );
+      };
+
+      const line = (text: string, width: number) => (text.length > width ? text.slice(0, width - 1) + "…" : text);
 
       const component = {
         invalidate(): void {
@@ -203,11 +216,25 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
         },
         render(width: number): string[] {
           const rows: string[] = [];
-          rows.push(theme.bold("Skills") + theme.fg("dim", `  — space: toggle · enter: save · esc: cancel`));
+          const items = filtered();
+          if (cursor < viewTop) viewTop = cursor;
+          if (cursor >= viewTop + PANEL_MAX_VISIBLE) viewTop = cursor - PANEL_MAX_VISIBLE + 1;
+          const enabled = state.filter((s) => !s.disabled).length;
+          const stats = `${state.length} skills · ${enabled} enabled · ${state.length - enabled} disabled`;
+          const filterTag = filter ? theme.fg("accent", ` · ${items.length}/${state.length} shown`) : "";
+          rows.push(theme.bold("Skills") + theme.fg("dim", `  — ${stats}${filterTag}`));
+          const searchRow = searchMode
+            ? theme.fg("accent", `filter: ${filter}█`)
+            : filter
+              ? theme.fg("dim", `filter: ${filter}`)
+              : theme.fg("dim", "press / to filter");
+          rows.push(searchRow);
           rows.push("");
-          const visible = state.slice(0, PANEL_MAX_VISIBLE);
-          for (let i = 0; i < visible.length; i++) {
-            const { skill, disabled } = visible[i];
+          if (items.length === 0) {
+            rows.push(theme.fg("dim", "  (no match)"));
+          }
+          for (let i = viewTop; i < Math.min(items.length, viewTop + PANEL_MAX_VISIBLE); i++) {
+            const { skill, disabled } = items[i];
             const marker = i === cursor ? theme.fg("accent", "▸ ") : "  ";
             const box = disabled ? theme.fg("dim", "[x]") : theme.fg("success", "[ ]");
             const name = line(skill.name, 24).padEnd(24);
@@ -217,33 +244,71 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
             const row = `${marker}${box} ${disabled ? theme.fg("dim", name) : name} ${theme.fg("dim", desc)}  ${scopeTag}${warn}`;
             rows.push(i === cursor ? theme.fg("accent", row) : row);
           }
-          if (state.length > PANEL_MAX_VISIBLE) {
-            rows.push(theme.fg("dim", `  … ${state.length - PANEL_MAX_VISIBLE} more (edit settings.json directly)`));
-          }
           rows.push("");
-          const sel = state[cursor]?.skill;
+          const sel = items[cursor]?.skill;
           if (sel?.errors.length) {
             rows.push(theme.fg("error", `⚠ ${sel.name}: ${sel.errors.join("; ")}`));
           }
+          if (feedback) {
+            rows.push(theme.fg("success", `✓ ${feedback}`));
+          }
+          const stale = stalePatterns(readSettings(), skills);
+          if (stale.length > 0) {
+            rows.push(theme.fg("warning", `${stale.length} stale pattern(s) in settings: ${stale.join(", ")} — press c to clean`));
+          }
+          rows.push(theme.fg("dim", "  space toggle (saved instantly) · / filter · esc close"));
           return rows;
         },
         handleInput(data: string): void {
+          const items = filtered();
+          if (cursor > items.length - 1) cursor = Math.max(0, items.length - 1);
+          if (searchMode) {
+            if (matchesKey(data, Key.escape)) {
+              searchMode = false;
+              filter = "";
+              cursor = 0;
+              viewTop = 0;
+              tui.requestRender();
+            } else if (matchesKey(data, Key.backspace)) {
+              filter = filter.slice(0, -1);
+              cursor = 0;
+              viewTop = 0;
+              tui.requestRender();
+            } else if (data.length === 1 && data >= " " && data !== "\x7f") {
+              filter += data;
+              cursor = 0;
+              viewTop = 0;
+              tui.requestRender();
+            }
+            return;
+          }
           if (matchesKey(data, Key.up) || data === "k") {
-            cursor = (cursor - 1 + state.length) % state.length;
+            cursor = Math.max(0, cursor - 1);
+            feedback = "";
             tui.requestRender();
           } else if (matchesKey(data, Key.down) || data === "j") {
-            cursor = (cursor + 1) % state.length;
+            cursor = Math.min(items.length - 1, cursor + 1);
+            feedback = "";
             tui.requestRender();
           } else if (matchesKey(data, Key.space)) {
-            const entry = state[cursor];
+            const entry = items[cursor];
+            if (!entry) return;
             entry.disabled = !entry.disabled;
             setDisabled(entry.skill, entry.disabled);
+            feedback = `${entry.skill.name} → ${entry.disabled ? "disabled" : "enabled"}`;
             tui.requestRender();
-          } else if (matchesKey(data, Key.enter)) {
-            const toggled = state.filter((s) => s.disabled !== initial.get(s.skill.name)).map((s) => s.skill.name);
-            done({ toggled, cancelled: false });
-          } else if (matchesKey(data, Key.escape)) {
-            done({ toggled: [], cancelled: true });
+          } else if (data === "/") {
+            searchMode = true;
+            tui.requestRender();
+          } else if (data === "c" && stalePatterns(readSettings(), skills).length > 0) {
+            const s = readSettings();
+            const stale = stalePatterns(s, skills);
+            s.skills = (s.skills ?? []).filter((p) => !stale.includes(p.replace(/^[!+-]/, "")));
+            writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + "\n");
+            feedback = `removed ${stale.length} stale pattern(s)`;
+            tui.requestRender();
+          } else if (matchesKey(data, Key.escape) || data === "q") {
+            done();
           }
         },
       };
@@ -292,16 +357,7 @@ export default function skillManager(pi: ExtensionAPI) {
 
       if (!sub) {
         const skills = discoverSkills(ctx.cwd ?? process.cwd());
-        const result = await openPanel(pi, ctx, skills);
-        if (result && !result.cancelled) {
-          const n = result.toggled.length;
-          ctx.ui.notify(
-            n > 0
-              ? `Saved. ${n} skill${n > 1 ? "s" : ""} toggled: ${result.toggled.join(", ")}. Restart pi or /reload to apply.`
-              : "No changes.",
-            "info",
-          );
-        }
+        await openPanel(pi, ctx, skills);
         return;
       }
 

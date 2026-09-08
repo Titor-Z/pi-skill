@@ -23,6 +23,11 @@
 - npm 名称探测：`pi-skiller` 未被占用但与现有 `skiller` 包（zbeyens）名字相近；`pi-skill-manager`、`pi-skills-manager` 已被占用；最终定名 `@foolsecret/pi-skill`。
 - 项目命令定为 `/skill`（无参数进入交互面板，与 pi 内置的 `/skill:name` 命令空间不冲突）；项目位于 `~/projects/pi-skill/`，计划以 npm 包发布。
 
+### 2026-09-08 会话 3 — 对齐 /scoped-models 的即时保存交互
+
+- 用户提出模仿 pi 内置 `/scoped-models` 的交互：空格即切换即持久化，去掉回车确认语义；同时保留搜索过滤等增强。
+- 已重构 openPanel：两态输入（浏览/搜索）、统计行、滚动 viewport、切换即时落盘 + 页脚 `skill → state ✓` 反馈、`c` 清理残留 `!条目`；README/CHANGELOG 同步，冒烟测试全过。
+
 ---
 
 ## 项目进度
@@ -34,10 +39,12 @@
 - [x] npm 名称可用性探测，定名 `@foolsecret/pi-skill`
 - [x] 项目骨架：git 仓库、package.json（pi manifest + peerDependencies）
 - [x] AGENTS.md、CHANGELOG.md、README.md
-- [x] `/skill` 交互面板（列表、空格切换、回车保存、Esc 取消）
+- [x] `/skill` 交互面板（列表、空格切换、Esc 取消）
 - [x] 子命令整合：`/skill new`、`/skill validate`
 - [x] 旧扩展文件清理（`~/.pi/agent/extensions/skill-manager.ts` 已删除，改由包加载）
 - [x] `pi install ~/projects/pi-skill` 本地注册（settings.packages 引用本地包路径，启动无报错）
+- [x] 面板交互重设计：即时保存、搜索过滤、统计行、viewport 滚动、残留清理
+
 ### 待办
 
 - [ ] `pi -e ~/projects/pi-skill` 本地实机验证
@@ -45,7 +52,6 @@
 - [ ] 项目级（project scope）开关支持（写 `.pi/settings.json`，类似 `pi config` 的 Tab 切换）
 - [ ] 冲突检测：同名 skill 多来源时的提示（pi 保留先发现者）
 - [ ] skill 安装/卸载（`/skill install <git-url|npm>`）
-- [ ] 面板超过 16 项时的滚动（当前提示直接编辑 settings.json）
 
 ---
 
@@ -81,9 +87,9 @@
 
 用 tsx 做冒烟测试时，tsconfig `paths` 指向的 `.d.ts` 会被 tsx 当作运行时模块编译（其内部 `import "./x.ts"` 解析失败）。解决办法：测试时用 `TSX_TSCONFIG_PATH` 指向一份无 paths 的精简 tsconfig，同时在项目 node_modules 里放置 pi 模块的运行时 stub。注意 stub 会污染 `npm publish`，发布必须用 `files` 白名单。
 
-### 知识点 8：toggle 提示信息要与"面板初始状态"比较
+### 知识点 8：toggle 状态报告的基准（历史：已由即时保存取代）
 
-面板中每次空格切换都立即持久化到 settings.json，因此"保存后报告改了哪些项"必须与面板打开时的初始状态快照对比，而不是与实时的 settings 内容对比——否则永远显示"无变化"。
+首版面板采用"回车批量保存"时，变更报告曾错误地与实时 settings 对比导致永远显示"无变化"；必须与面板打开时的快照对比。重构为即时保存后此问题消失，但若未来引入批量操作，仍需注意快照基准。
 
 ### 知识点 9：本地包注册用 `pi install <目录路径>`
 
