@@ -28,7 +28,8 @@ pi install npm:@foolsecret/pi-skill
 
 禁用状态写入 `~/.pi/agent/settings.json` 的 `skills` 数组（`!名字` 覆盖条目）——
 这是 pi 原生的资源开关机制（与 `pi config` 同源），不改文件名、不碰 skill 内容。
-保存后重启 pi 或执行 `/reload` 生效。
+注意：数组里只存覆盖指令，**数组为空即全部启用**——启用某个 skill 意味着移除
+对应的 `!名字` 条目，而不是写入白名单。保存后重启 pi 或执行 `/reload` 生效。
 
 ### 🌱 脚手架 — `/skill new <name>`
 

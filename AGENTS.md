@@ -44,6 +44,7 @@
 - 研读了 pi 的 `ScopedModelsSelectorComponent` 参考实现（dist/modes/interactive/components/），逐元素对齐：居中滚动视口、`(n/N)` 指示、选中项详情行、底部按键提示栏（`getKeybindings().getKeys()` 读取用户实际键位）、`fuzzyFilter` 模糊搜索、单焦点输入（直接打字即过滤，Esc 先清过滤再关闭）、Ctrl+A/Ctrl+X 批量启用/禁用（作用于过滤结果）。
 - 顺带修掉了会话 4 发现的三个隐患之一：`setDisabled` 重写为只增删精确 `!名字` 条目（Set 操作），不再碰普通搜索路径条目；残留清理迁移到 Ctrl+D 且只删 `!` 前缀条目。剩余两隐患（fail-closed 读入、原子写+锁）待办中。
 - 冒烟测试验证了开发规范：`HOME=$(mktemp -d)` 隔离跑 tsx，39 项断言全过，并直接断言"真实 settings.json 未被触碰"。两个教训：① 测试断言要跟实现语义对齐（滚动指示器只在超出视口时出现、toggle 不移动光标）；② 项目 node_modules 的 pi-tui stub 需随新 API 同步补齐（fuzzyFilter/getKeybindings/Key.ctrl）。
+- 用户后续疑问：启用（打勾）后 settings 的 skills 数组反而变成空数组，是否丢数据。结论：不是 bug——pi 的 skills 数组只存覆盖指令（源码 isEnabledByOverrides 证实），空数组 = 全部启用；为此页脚计数改用 "all enabled" 文案（对齐 scoped-models），README 补充语义说明。顺带归因了原 "design-md" 普通条目消失：系修复前的旧版 setDisabled 误删（该条目本身指向不存在的目录，为无效条目）；pi 官方 config 切换时同样会清同名条目，新实现更保守。
 - README/CHANGELOG 同步，含 setDisabled 误删修复的 Fixed 条目。
 
 ---

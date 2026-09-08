@@ -273,7 +273,7 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
           "ctrl+x clear",
         ];
         if (stale.length > 0) parts.push("ctrl+d clean stale");
-        parts.push(`${enabled}/${state.length} enabled`);
+        parts.push(enabled === state.length ? "all enabled" : `${enabled}/${state.length} enabled`);
         rows.push(theme.fg("dim", `  ${parts.join(" · ")}`));
         return rows;
       },
