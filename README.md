@@ -47,6 +47,18 @@ pi install npm:@foolsecret/pi-skill
 > 注：pi 内置的 `/skill:name` 命令（加载执行某个 skill）与本项目注册的 `/skill`
 > 命令互不冲突。
 
+## 发布
+
+发布由 GitHub Actions 完成，本地不需要 npm 登录态：
+
+```bash
+npm version patch        # 或 minor / major，同步 package.json 与 CHANGELOG
+git push --follow-tags   # v* tag 触发 workflow：类型检查 → npm publish --provenance
+```
+
+tag 推送后 Actions 会自动执行类型检查并发布到 npm（带 provenance 供应鈥证明）；
+也可在 Actions 页手动触发 `publish` 工作流并勾选 dry run 验证流程（不消耗版本号）。
+
 ## License
 
 MIT
