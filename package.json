@@ -1,0 +1,32 @@
+{
+  "name": "@foolsecret/pi-skill",
+  "version": "0.1.0",
+  "description": "Skill manager for pi: interactive enable/disable panel, scaffolding, and spec validation for Agent Skills.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "skills",
+    "agent-skills",
+    "skill-manager"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2"
+  }
+}

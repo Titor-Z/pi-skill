@@ -1,0 +1,35 @@
+# Changelog
+
+本文件记录 @foolsecret/pi-skill 的每次版本更新，以产品视角描述带给用户的改变，
+可直接用作 GitHub Release 详情。
+
+## [Unreleased]
+
+## [0.1.0] — 首个公开版本
+
+献给每一个装了一堆 skill，却记不清哪个还开着的 pi 用户。
+
+### 🎛️ 一眼看清你的所有 skill
+
+新增 `/skill` 命令，打开交互式管理面板。pi 能找到的每一个 skill——全局的、项目的、
+无论装在哪里——都列在一个清单里：名字、用途简介、来自哪里、是否启用，一目了然。
+
+### ⌨️ 空格之间，随开随关
+
+在面板里按空格即可切换任意 skill 的启用状态，回车保存。无需记配置格式、无需手动
+编辑 settings.json、更不用改名任何文件——我们直接使用 pi 原生的资源开关机制，
+改完重启（或 `/reload`）即刻生效。
+
+### 🌱 三十秒造一个新 skill
+
+`/skill new <name>` 一条命令生成符合 Agent Skills 官方规范的 skill 骨架：
+合法命名自动校验，SKILL.md 模板和 references/ 目录一步到位，从想法到可加载
+只差填内容。
+
+### ✅ 发布前先体检
+
+`/skill validate [name]` 按 Agent Skills 规范为你的 skill 做全面体检：
+frontmatter 是否完整、命名是否合法、描述是否超长，问题逐条指出，不再靠踩坑发现。
+
+[Unreleased]: https://github.com/foolsecret/pi-skill/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/foolsecret/pi-skill/releases/tag/v0.1.0
