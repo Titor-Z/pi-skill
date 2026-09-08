@@ -29,8 +29,14 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - name: Publish
-        run: >-
-          npm publish --access public
-          ${{ inputs.dry_run == true && '--dry-run' || '--provenance' }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            # dry-run still checks version conflicts against the registry;
+            # bump a throwaway patch so it never collides with a real release
+            npm version patch --no-git-tag-version
+            npm publish --dry-run --access public
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
