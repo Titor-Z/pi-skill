@@ -3,7 +3,7 @@
 本文件记录 @foolsecret/pi-skill 的每次版本更新，以产品视角描述带给用户的改变，
 可直接用作 GitHub Release 详情。
 
-## [Unreleased]
+## [0.2.0] — 2026-09-08
 
 ### Improved
 
@@ -54,5 +54,5 @@
 `/skill validate [name]` 按 Agent Skills 规范为你的 skill 做全面体检：
 frontmatter 是否完整、命名是否合法、描述是否超长，问题逐条指出，不再靠踩坑发现。
 
-[Unreleased]: https://github.com/foolsecret/pi-skill/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/foolsecret/pi-skill/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/foolsecret/pi-skill/releases/tag/v0.1.0
