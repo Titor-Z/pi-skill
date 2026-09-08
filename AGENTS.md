@@ -1,6 +1,6 @@
 # AGENTS.md — pi-skill 项目协作文档
 
-本文件由人类与 agent 共同维护，包含三个固定章节。每次开发对话后必须更新。
+本文件由人类与 agent 共同维护，包含四个固定章节（讨论记录、项目进度、认知纠正、开发规范）。每次开发对话后必须更新。
 
 ---
 
@@ -30,6 +30,14 @@
 
 ---
 
+### 2026-09-08 会话 4 — settings.json 被重置的事故归因与开发规范
+
+- 用户报告每次开发后 `~/.pi/agent/settings.json` 都被重置、已启用的 packages 被删。归因结论：插件自身的代码路径（setDisabled、残留清理均为读-改-写，保留其他键）没有删过 packages；重置来自历次开发会话对真实 settings.json 的直接改写——session 日志中找到三处证据（2026-09-05 pi-usager 会话、2026-09-06 pi-glmbridger 会话的 .bak 备份+删键、2026-09-08 本项目会话冒烟测试时 `d['skills']=[]` 清空 skills 数组）。
+- 顺带审查出插件 settings 写入的三个隐患：readSettings 吞掉 JSON 解析错误返回 `{}`（随后一次写入即覆写全文件）、写入非原子且不加 pi 使用的 proper-lockfile 锁、setDisabled 的清理逻辑会把 skills 数组里的普通搜索路径条目（非覆盖条目，如 `"design-md"`）误当开关删除。
+- 用户决定：本次只做记录，在 AGENTS.md 新增"开发规范"章节，明确不允许 agent 随意修改用户真实开发环境；隐患修复留待后续。
+
+---
+
 ## 项目进度
 
 ### 已完成
@@ -52,6 +60,7 @@
 - [ ] 项目级（project scope）开关支持（写 `.pi/settings.json`，类似 `pi config` 的 Tab 切换）
 - [ ] 冲突检测：同名 skill 多来源时的提示（pi 保留先发现者）
 - [ ] skill 安装/卸载（`/skill install <git-url|npm>`）
+- [ ] 修复插件 settings 写入的三个隐患：readSettings 解析失败 fail-closed（拒绝写入而非返回空对象）、原子写（tmp+rename）+ proper-lockfile 锁、setDisabled/清理只增删本插件拥有的 `!name` 精确覆盖条目
 
 ---
 
@@ -94,3 +103,32 @@
 ### 知识点 9：本地包注册用 `pi install <目录路径>`
 
 本地目录包应通过 `pi install ~/projects/pi-skill` 注册（写入 settings 的 `packages` 数组，相对路径相对 `~/.pi/agent` 解析），而不是手动往 `extensions` 数组里塞目录——前者走包规则（`pi` manifest、约定目录发现），后者只加载单个扩展文件。
+
+---
+
+## 开发规范
+
+本节由 2026-09-08 会话 4 的 settings.json 重置事故直接促成，优先级高于其他惯例。历史教训：历次开发会话曾为冒烟测试/配置迁移直接改写用户真实的 `~/.pi/agent/settings.json`（清空 skills 数组、删除 modelThinkingLevels/retry 等键），造成用户配置丢失。
+
+### 禁止修改用户真实环境
+
+- 用户真实环境中的配置与数据文件属于用户资产，不是项目产物，**一律不得直接修改、删除、清空**。包括但不限于：`~/.pi/agent/settings.json`、`~/.pi/agent/auth.json`、`~/.pi/agent/models-store.json`、`~/.pi/agent/skills/`、`~/.pi/agent/extensions/`、`~/.pi/agent/npm/`、shell 配置（`.zshrc` 等）。
+- 即使是"看起来无害的键值微调"也不允许——测试遗留写入与"临时"删键正是本次事故的根源。
+
+### 测试必须隔离
+
+- 凡涉及读/写用户级目录的代码（如本项目扩展通过 `os.homedir()` 定位 settings.json），冒烟测试必须在隔离环境中运行：POSIX 下设置 `HOME` 指向临时目录（如 `HOME=/tmp/pi-skill-test-$(date +%s)`）再跑 tsx，或改用临时目录 + 依赖注入。
+- 严禁为了"构造测试场景"而用脚本（python3/node/jq 等）改写真实配置文件。
+
+### 确需改动时：先问、先备份、后记录
+
+- 确有正当理由需要改动用户真实环境（且是用户明确要求的），必须先说明改动内容与影响范围，征得用户同意后才能执行。
+- 执行前必须备份（如 `cp settings.json settings.json.bak`），执行后在对话与 AGENTS.md 中记录改了什么、为什么改。
+
+### 只用官方命令
+
+- 能用官方命令完成的操作，不许用脚本直接改写其配置文件：包的装/卸/启用用 `pi install` / `pi remove` / `pi config`，不要手写 settings.json 的 `packages`/`skills` 数组。
+
+### 插件自身的健壮性义务
+
+- 扩展写用户配置时必须：read-modify-write 并保留全部未知字段；解析失败时 fail-closed（拒绝写入并报错，绝不基于空对象覆写）；原子写（tmp 文件 + rename）并加与 pi 一致的文件锁；只增删自己拥有的条目，不动用户的其他配置。
