@@ -217,8 +217,23 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
       return fuzzyFilter(state, filter, (s) => `${s.skill.name} ${s.skill.description}`);
     };
 
-    const line = (text: string, width: number) => (text.length > width ? text.slice(0, width - 1) + "…" : text);
-
+/** Word-wrap plain text; every line gets the same left padding so continuation lines align with the first. */
+function wrapDetail(content: string, indent: number, width: number): string[] {
+  const pad = " ".repeat(indent);
+  const avail = Math.max(10, width - indent);
+  const out: string[] = [];
+  let cur = "";
+  for (const word of content.split(/\s+/).filter(Boolean)) {
+    if (!cur) cur = word;
+    else if (cur.length + 1 + word.length <= avail) cur += ` ${word}`;
+    else {
+      out.push(cur);
+      cur = word;
+    }
+  }
+  if (cur) out.push(cur);
+  return out.map((l) => pad + l);
+}
     const component = {
       invalidate(): void {
         tui.requestRender();
@@ -228,7 +243,10 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
         if (cursor > items.length - 1) cursor = Math.max(0, items.length - 1);
         const enabled = state.filter((s) => !s.disabled).length;
         const rows: string[] = [];
+        const border = theme.fg("border", "─".repeat(Math.max(1, width)));
 
+        rows.push(border);
+        rows.push("");
         rows.push(theme.bold("Skill Configuration"));
         rows.push(theme.fg("dim", "Saved instantly. Takes effect after /reload."));
         rows.push("");
@@ -250,18 +268,17 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
             const warn = skill.errors.length > 0 ? theme.fg("error", " ⚠") : "";
             rows.push(`${prefix}${status}${name}${scope}${warn}`);
           }
-          if (start > 0 || end < items.length) {
-            rows.push(theme.fg("dim", `  (${cursor + 1}/${items.length})`));
-          }
+          // position indicator: always visible (like a selection stat, even when nothing scrolls)
+          rows.push(theme.fg("dim", `  (${cursor + 1}/${items.length})`));
           rows.push("");
-          // detail line for the selected skill
+          // detail lines for the selected skill (word-wrapped, continuation lines share the first line's indent)
           const sel = items[cursor]?.skill;
           if (sel) {
-            if (sel.errors.length > 0) {
-              rows.push(theme.fg("error", line(`⚠ ${sel.name}: ${sel.errors.join("; ")}`, Math.max(20, width - 2))));
-            } else {
-              rows.push(theme.fg("dim", line(`  ${sel.description || "(no description)"}`, Math.max(20, width - 2))));
-            }
+            const detail =
+              sel.errors.length > 0
+                ? wrapDetail(`⚠ ${sel.name}: ${sel.errors.join("; ")}`, 2, width).map((l) => theme.fg("error", l))
+                : wrapDetail(sel.description || "(no description)", 2, width).map((l) => theme.fg("dim", l));
+            rows.push(...detail);
           }
         }
         rows.push("");
@@ -274,7 +291,8 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
         ];
         if (stale.length > 0) parts.push("ctrl+d clean stale");
         parts.push(enabled === state.length ? "all enabled" : `${enabled}/${state.length} enabled`);
-        rows.push(theme.fg("dim", `  ${parts.join(" · ")}`));
+        rows.push(theme.fg("dim", parts.join(" · ")));
+        rows.push(border);
         return rows;
       },
       handleInput(data: string): void {
