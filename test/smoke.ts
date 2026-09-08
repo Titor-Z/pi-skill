@@ -101,7 +101,7 @@ function lastNotify(d: Driver): Notify | undefined {
 }
 
 async function main(): Promise<void> {
-  const { validateName, lintSkillEntry, scanAllForLint, scaffoldSkill, editDistance, helpBody, cmdCreate, cmdLint, PLACEHOLDER_DESCRIPTION, MAX_DESC } =
+  const { validateName, lintSkillEntry, scanAllForLint, scaffoldSkill, editDistance, helpBody, cmdCreate, cmdLint, argumentCompletions, PLACEHOLDER_DESCRIPTION, MAX_DESC } =
     __test;
 
   console.log("validateName");
@@ -307,6 +307,18 @@ async function main(): Promise<void> {
   ok(settingsObj.model === "test-model" && settingsObj.packages?.length === 1, "unrelated settings keys preserved");
   d11.component.handleInput("\x1b");
   await p11;
+
+  console.log("argument completions");
+  const ac = argumentCompletions;
+  const top = ac("") ?? [];
+  ok(top.length === 3 && top.map((i: any) => i.value).join(",") === "create ,lint ,help ", "empty args → all subcommands");
+  ok((ac("cr") ?? []).map((i: any) => i.value).join() === "create ", "partial subcommand → filtered");
+  ok(ac("bogus") === null, "unknown subcommand prefix → no completions");
+  const lintAll = ac("lint ") ?? [];
+  ok(lintAll.some((i: any) => i.value === "good" && i.description === "global"), "lint + space → skill names with scope");
+  ok((ac("lint goo") ?? []).map((i: any) => i.value).join() === "good", "lint partial name → filtered");
+  ok(ac("create x") === null, "create takes no second argument");
+  ok(ac("lint nope-xyz") === null, "lint unknown name → no completions");
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);

@@ -14,6 +14,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, getKeybindings, Key, matchesKey } from "@earendil-works/pi-tui";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -646,9 +647,40 @@ function editDistance(a: string, b: string): number {
   return dp[a.length][b.length];
 }
 
+/**
+ * Argument completions for /skill, driven by pi's getArgumentCompletions hook.
+ * argumentText is the full string after the command name: empty → subcommand
+ * list; partial subcommand → fuzzy-filtered subcommands; inside `lint` →
+ * fuzzy-filtered skill names from all discovered scopes.
+ */
+function argumentCompletions(argumentText: string): AutocompleteItem[] | null {
+  const trimmed = argumentText.replace(/^\s+/, "");
+  const [first, ...rest] = trimmed.split(/\s+/);
+  // help is handled by the dispatcher directly, but still completable
+  const completable = [...SUBCOMMANDS, { name: "help", args: "", description: "show this help" }];
+  const subcommandItem = (c: (typeof completable)[number]): AutocompleteItem => ({
+    value: `${c.name} `,
+    label: `${c.name} ${c.args}`.trimEnd(),
+    description: c.description,
+  });
+  if (!first) return completable.map(subcommandItem);
+  const cmd = SUBCOMMANDS.find((c) => c.name === first);
+  if (!cmd) {
+    const partial = fuzzyFilter(completable, first, (c) => c.name);
+    return partial.length > 0 ? partial.map(subcommandItem) : null;
+  }
+  if (first !== "lint") return null; // create/help take no completable second argument
+  const namePrefix = rest.join(" ");
+  const items = fuzzyFilter(discoverSkills(process.cwd()), namePrefix, (s) => s.name)
+    .slice(0, 32)
+    .map((s) => ({ value: s.name, label: s.name, description: s.scope === "global" ? "global" : "project" }));
+  return items.length > 0 ? items : null;
+}
+
 export default function skillManager(pi: ExtensionAPI) {
   pi.registerCommand("skill", {
     description: "Manage skills: panel (no args), create [name], lint [name], help",
+    getArgumentCompletions: argumentCompletions,
     handler: async (args, ctx) => {
       const rest = args.trim();
       if (!rest) {
@@ -688,6 +720,7 @@ export const __test = {
   helpBody,
   cmdCreate,
   cmdLint,
+  argumentCompletions,
   PLACEHOLDER_DESCRIPTION,
   MAX_DESC,
 };

@@ -3,6 +3,14 @@
 本文件记录 @foolsecret/pi-skill 的每次版本更新，以产品视角描述带给用户的改变，
 可直接用作 GitHub Release 详情。
 
+## [0.3.1] — 2026-09-09
+
+### Fixed
+
+- 补上 `/skill` 的参数自动补全：输入 `/skill ` 后提示子命令（create / lint / help），
+  输入 `/skill lint ` 后模糊提示全部可发现的 skill 名（带 global / project 来源），
+  选中即填入——对齐内置 `/model`、`/thinking` 的参数补全体验
+
 ## [0.3.0] — 2026-09-09
 
 ### Added

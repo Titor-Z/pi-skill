@@ -49,7 +49,8 @@ pi install npm:@foolsecret/pi-skill
 对所有能发现的 skill（全局 / 项目）做确定性规范检查，只报 error 级：frontmatter
 缺失、name 缺失或非法、name 与所在目录/文件名不一致、description 缺失或超长
 （≤1024 字符）、正文为空。带参数只检查指定 skill，无参数全量检查；
-`/skill help` 查看全部子命令。
+`/skill help` 查看全部子命令。参数支持自动补全：`/skill ` 后提示子命令，
+`/skill lint ` 后模糊提示 skill 名（对齐内置 `/model` 的补全体验）。
 
 > 注：pi 内置的 `/skill:name` 命令（加载执行某个 skill）与本项目注册的 `/skill`
 > 命令互不冲突。
