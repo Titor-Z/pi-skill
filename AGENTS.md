@@ -37,6 +37,7 @@
 - [x] `/skill` 交互面板（列表、空格切换、回车保存、Esc 取消）
 - [x] 子命令整合：`/skill new`、`/skill validate`
 - [x] 旧扩展文件清理（`~/.pi/agent/extensions/skill-manager.ts` 已删除，改由包加载）
+- [x] `pi install ~/projects/pi-skill` 本地注册（settings.packages 引用本地包路径，启动无报错）
 ### 待办
 
 - [ ] `pi -e ~/projects/pi-skill` 本地实机验证
@@ -83,3 +84,7 @@
 ### 知识点 8：toggle 提示信息要与"面板初始状态"比较
 
 面板中每次空格切换都立即持久化到 settings.json，因此"保存后报告改了哪些项"必须与面板打开时的初始状态快照对比，而不是与实时的 settings 内容对比——否则永远显示"无变化"。
+
+### 知识点 9：本地包注册用 `pi install <目录路径>`
+
+本地目录包应通过 `pi install ~/projects/pi-skill` 注册（写入 settings 的 `packages` 数组，相对路径相对 `~/.pi/agent` 解析），而不是手动往 `extensions` 数组里塞目录——前者走包规则（`pi` manifest、约定目录发现），后者只加载单个扩展文件。
