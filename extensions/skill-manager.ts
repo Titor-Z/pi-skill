@@ -217,13 +217,11 @@ function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, skills: Skill
       return fuzzyFilter(state, filter, (s) => `${s.skill.name} ${s.skill.description}`);
     };
 
-/** Word-wrap plain text; every line gets the same left padding so continuation lines align with the first. */
-function wrapDetail(content: string, indent: number, width: number): string[] {
-  const pad = " ".repeat(indent);
-  const avail = Math.max(10, width - indent);
+/** Word-wrap plain text to the given available width. */
+function wordWrap(text: string, avail: number): string[] {
   const out: string[] = [];
   let cur = "";
-  for (const word of content.split(/\s+/).filter(Boolean)) {
+  for (const word of text.split(/\s+/).filter(Boolean)) {
     if (!cur) cur = word;
     else if (cur.length + 1 + word.length <= avail) cur += ` ${word}`;
     else {
@@ -232,7 +230,51 @@ function wrapDetail(content: string, indent: number, width: number): string[] {
     }
   }
   if (cur) out.push(cur);
-  return out.map((l) => pad + l);
+  return out;
+}
+
+/** Wrap with a fixed indent on every line, so continuation lines align with the first. */
+function wrapDetail(content: string, indent: number, width: number): string[] {
+  const pad = " ".repeat(indent);
+  return wordWrap(content, Math.max(10, width - indent)).map((l) => pad + l);
+}
+
+const LIST_MARKER_RE = /(^|\s)([-•*]|\d{1,2}[.)]|\([a-z0-9]{1,2}\)|[a-z]\))(?=\s)/gi;
+
+/** Split an inline enumeration ("(a) … (b) …", "1. … 2. …", "- … - …") into intro + items; null if not list-like. */
+function splitList(description: string): { intro: string; items: string[] } | null {
+  const marks: number[] = [];
+  for (const m of description.matchAll(LIST_MARKER_RE)) {
+    marks.push((m.index ?? 0) + m[1].length);
+  }
+  if (marks.length < 2) return null;
+  const intro = description.slice(0, marks[0]).trim();
+  const items = marks.map((start, i) =>
+    description.slice(start, i + 1 < marks.length ? marks[i + 1] : description.length).trim(),
+  );
+  return { intro, items };
+}
+
+/**
+ * Render a description as wrapped detail lines. Inline enumerations — ordered
+ * ("(a) …", "1. …") and unordered ("- …", "• …") — are laid out as list blocks:
+ * each item on its own line, continuation lines aligned under the item text.
+ */
+function renderDescription(description: string, width: number): string[] {
+  const list = splitList(description);
+  if (!list) return wrapDetail(description, 2, width);
+  const out: string[] = [];
+  if (list.intro) out.push(...wrapDetail(list.intro, 2, width));
+  for (const item of list.items) {
+    const m = /^(\S+)\s+(.*)$/s.exec(item);
+    const marker = m ? m[1] : item;
+    const text = m ? m[2] : "";
+    const textIndent = 4 + marker.length + 1;
+    const lines = wordWrap(text, Math.max(10, width - textIndent));
+    out.push(" ".repeat(4) + marker + (lines[0] ? ` ${lines[0]}` : ""));
+    for (const l of lines.slice(1)) out.push(" ".repeat(textIndent) + l);
+  }
+  return out;
 }
     const component = {
       invalidate(): void {
@@ -271,13 +313,13 @@ function wrapDetail(content: string, indent: number, width: number): string[] {
           // position indicator: always visible (like a selection stat, even when nothing scrolls)
           rows.push(theme.fg("dim", `  (${cursor + 1}/${items.length})`));
           rows.push("");
-          // detail lines for the selected skill (word-wrapped, continuation lines share the first line's indent)
+          // detail lines for the selected skill (lists split out, everything word-wrapped with aligned continuations)
           const sel = items[cursor]?.skill;
           if (sel) {
             const detail =
               sel.errors.length > 0
                 ? wrapDetail(`⚠ ${sel.name}: ${sel.errors.join("; ")}`, 2, width).map((l) => theme.fg("error", l))
-                : wrapDetail(sel.description || "(no description)", 2, width).map((l) => theme.fg("dim", l));
+                : renderDescription(sel.description || "(no description)", width).map((l) => theme.fg("dim", l));
             rows.push(...detail);
           }
         }
